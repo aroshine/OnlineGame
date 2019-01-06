@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.socket.io/socket.io-1.4.5.js"></script>
+<script src="http://d3js.org/d3.v3.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+<script>
+$(function(){
+	var maxX = 1500;
+	var maxY = 800;
+	var radius = 30;
+
+	var USER_ID = null;
+	var users = {};
+
+	var socket = io();
+	// When the window is closed, let the server know the user has left the game.
+	window.onbeforeunload = function(e) {
+	  socket.disconnect();
+	};
+
+	///////////////////////////
+	// Communication with server
+	///////////////////////////
+	socket.on("joinGame",function(data){
+		USER_ID = data.userId;
+       	var user = {"userData":data,"graphic":drawUser(data,USER_ID)};
+       	users[USER_ID] = user;
+      	console.log("Joined game!");
+	});
+
+	// Read gameState from the server. This will be sent with a 25 FPS.
+	socket.on("gameState",function(gameState){
+
+		if(USER_ID != null){
+			for(var u in gameState.users) {
+				if(u != USER_ID){
+					if(!(u in users)) {
+						// New user
+						users[u] = {"userData":gameState.users[u],"graphic":drawUser(gameState.users[u],u)};
+					} else {
+						users[u]["userData"] = gameState.users[u];
+					}
+				} else {
+					users[USER_ID]["userData"]["username"] = gameState.users[USER_ID]["username"];
+				}
+			}
+			for(var u in users) {
+				if(!(u in gameState.users)) {
+					//Other user has left the game
+					users[u]["graphic"].remove()
+					delete users[u];
+				}
+			}
+		}
+		// Only render this once per update, not on every frame:
+		$("#users-online").html(Object.values(users).map(u => u.userData.username !== undefined ? u.userData.username : "Unknown User").join("<br>"));
+	});
+	function sendMoveToServer(x,y) {
+		socket.emit("move",{"x":x,"y":y});
+	}
+
+
+	////////////////////////////
+	// Graphics update/Main loop
+	////////////////////////////
+
+	var svg = d3.select("#game");
+
+
+	function drawUser(userData,userId){
+		var circle = svg.selectAll("#user_"+userId).data([userData]);
+		circle.enter().append("circle")
+		.attr("r",function (d) { return 30; })
+		.attr("cx", function (d) { return d.x; })
+		.attr("cy", function (d) { return d.y; })
+		.style("fill", function (d) { return d.fill; })
+		.style("stroke", function (d) { return "black"; })
+		.style("stroke-width", function (d) { return 2; });
+		return circle;
+	}
+	function step() {
+		// Change the users moving speed if any keys are being held down.
+        var dx = 0
+		var dy = 0
+		if(MOVING_LEFT) 
+			dx = -5;
+		if(MOVING_RIGHT)
+			dx = 5;
+		if(MOVING_UP)
+			dy = -5;
+		if(MOVING_DOWN)
+			dy = 5;
+
+		// Move the player 
+        if(USER_ID != null) {
+        	// Make sure player doesn't escape game on Y axis.
+        	var c = users[USER_ID].userData;
+        	var oldX = c.x;
+        	var oldY = c.y;
+	        if(c.y + dy >= maxY) 
+	        	c.y = maxY;
+	        else if(c.y + dy <= 0)
+	        	c.y = 0;
+	        else
+	        	c.y += dy;
+	        // Make sure player doesn't escape game on X axis.
+	       	if(c.x + dx >= maxX)
+	       		c.x = maxX;
+	       	if(c.x + dx <= 0)
+	       		c.x = 0;
+	       	else 
+	       		c.x += dx;
+	       	
+	       	if(oldX != c.x || oldY != c.y) {
+	       		sendMoveToServer(c.x,c.y);
+	       	}
+
+	       	users[USER_ID]["graphic"]
+	       		.attr("cx",c.x)
+	       		.attr("cy",c.y);
+			
+        }
+        // Move other players - using 
+        for(var u in users) {
+        	if(u != USER_ID) {
+        		users[u]["graphic"]
+        			.attr("cx",users[u].userData.x)
+        			.attr("cy",users[u].userData.y);	
+        	}
+        }
+
+	}
+	function mainLoop() {
+		step();
+		requestAnimationFrame(mainLoop);
+	}
+	requestAnimationFrame(mainLoop);
+
+	////////////////////////
+	// Input from user
+	////////////////////////
+	var MOVING_LEFT = false;
+	var MOVING_RIGHT = false;
+	var MOVING_UP = false;
+	var MOVING_DOWN = false;
+
+	$(document).on("keydown keypress",function(e){
+		if(e.keyCode == 65){ // a
+			MOVING_LEFT = true;
+		} else if(e.keyCode == 68) { // d
+			MOVING_RIGHT = true;
+		} else if(e.keyCode == 87) { // w
+			MOVING_UP = true;
+		} else if(e.keyCode == 83) { // s
+			MOVING_DOWN = true;
+		}
+	});
+	$(document).on("keyup",function(e){
+		if(e.keyCode == 65){ // a
+			MOVING_LEFT = false;
+		} else if(e.keyCode == 68) { // d
+			MOVING_RIGHT = false;
+		} else if(e.keyCode == 87) { // w
+			MOVING_UP = false;
+		} else if(e.keyCode == 83) { // s
+			MOVING_DOWN = false;
+		}
+	});
+
+	$("#register-username").click(function(){
+		var username = $("#username").val();
+		socket.emit("registerUsername",{"username":username});
+	});
+});
+</script>
+<style>
+	body, input, button {
+		font-size: 18px;
+	}
+	svg {
+		display:block;
+		margin: 0 auto;
+		background-color: #EEEEEE;
+	}
+	.main {
+		margin: 0 auto;
+		width: 800px;
+	}
+	.side-panel {
+		position: absolute;
+		top:5px;
+		left:10px;
+	}
+</style>
+</head>
+<body>
+	<svg id="game" width="1500" height="800"></svg>
+	<div class="main">
+		<h3>Welcome to the Online Game!</h3>
+		<input type="text" id="username" placeholder="Type your desired username">
+		<button id="register-username">Change name!</button><br>
+		Move your character with the ASDW-keys.
+	</div>
+	<div class="side-panel">
+		<h3>Players Online</h3>
+		<div id="users-online"></div>
+	</div>
+	
+
+</body>
+</html>
